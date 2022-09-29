@@ -321,7 +321,7 @@ lazySizesConfig.expFactor = 4;
         case 'amount_with_comma_separator':
           value = formatWithDelimiters(cents, 2, '.', ',');
   
-          if (superScript && value && value.includes(',')) {
+          if (superScript && value && value.includes('.')) {
             value = value.replace(',', '<sup>') + '</sup>';
           }
   
@@ -824,7 +824,6 @@ lazySizesConfig.expFactor = 4;
       this.singleOptionSelector = options.singleOptionSelector;
       this.originalSelectorId = options.originalSelectorId;
       this.enableHistoryState = options.enableHistoryState;
-      this.dynamicVariantsEnabled = options.dynamicVariantsEnabled;
       this.currentlySelectedValues = this._getCurrentOptions();
       this.currentVariant = this._getVariantFromOptions();
   
@@ -930,14 +929,7 @@ lazySizesConfig.expFactor = 4;
         const closestAvailableMatch = this._getClosestAvailableMatch(lastSelectedOption);
         const fullMatch = this._getFullMatch(false);
   
-        if (this.dynamicVariantsEnabled) {
-          // Add some additional smarts to variant matching if Dynamic Variants are enabled
-          return availableFullMatch || closestAvailableMatch || fullMatch || null;
-        } else {
-          // Only return a full match or null (variant doesn't exist) if Dynamic Variants are disabled
-          return fullMatch || null;
-        }
-  
+        return availableFullMatch || closestAvailableMatch || fullMatch || null;
       },
   
       _updateInputState: function (variant, el) {
@@ -950,8 +942,6 @@ lazySizesConfig.expFactor = 4;
   
           if (type === 'radio' || type === 'checkbox') {
             input.checked = variant[index] === value
-          } else {
-            input.value = variant[index];
           }
         }
       },
@@ -1058,12 +1048,9 @@ lazySizesConfig.expFactor = 4;
       },
   
       _updateMasterSelect: function(variant) {
-        let masterSelect = this.container.querySelector(this.originalSelectorId);
-        if (!masterSelect) return;
-  
-        masterSelect.value = variant.id;
+        this.container.querySelector(this.originalSelectorId).value = variant.id;
         // Force a change event so Shop Pay installments works after a variant is changed
-        masterSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        this.container.querySelector(this.originalSelectorId).dispatchEvent(new Event('change', { bubbles: true }));
       }
     });
   
@@ -1115,7 +1102,9 @@ lazySizesConfig.expFactor = 4;
     }
   
     var defaults = {
+      background: true,
       byline: false,
+      controls: false,
       loop: true,
       muted: true,
       playsinline: true,
@@ -1158,19 +1147,7 @@ lazySizesConfig.expFactor = 4;
         this.iframe = this.el.querySelector('iframe');
         this.iframe.setAttribute('tabindex', '-1');
   
-        if (this.options.loop === 'false') {
-          this.videoPlayer.setLoop(false);
-        }
-  
-        // When sound is enabled in section settings,
-        // for some mobile browsers Vimeo video playback
-        // will stop immediately after starting and
-        // will require users to tap the play button once more
-        if (this.options.style === 'sound') {
-         this.videoPlayer.setVolume(1);
-        } else {
-          this.videoPlayer.setVolume(0);
-        }
+        this.videoPlayer.setMuted(true);
   
         this.setAsLoaded();
   
@@ -1197,7 +1174,6 @@ lazySizesConfig.expFactor = 4;
         if (!this.parent) return;
         this.parent.classList.remove(classes.loading);
         this.parent.classList.add(classes.loaded);
-        this.parent.classList.add(classes.interactable); // Once video is loaded, we should be able to interact with it
         if (Shopify && Shopify.designMode) {
           if (window.AOS) {AOS.refreshHard()}
         }
@@ -2561,110 +2537,114 @@ lazySizesConfig.expFactor = 4;
     return Modal;
   })();
   
-  /*============================================================================
-    ParallaxImage
-  ==============================================================================*/
+  theme.parallaxSections = {};
   
-  class ParallaxImage extends HTMLElement {
-    constructor() {
-      super();
-      this.parallaxImage = this.querySelector('[data-parallax-image]');
-      this.windowInnerHeight = window.innerHeight;
-      this.isActive = false;
-      this.timeout = null;
-      this.directionMap = {
-        right: 0,
-        top: 90,
-        left: 180,
-        bottom: 270
-      }
-      this.directionMultipliers = {
-        0: [  1,  0 ],
-        90: [  0, -1 ],
-        180: [ -1,  0 ],
-        270: [  0,  1 ]
+  theme.Parallax = (function() {
+    var speed = 0.85;
+    var reset = false;
+  
+    function parallax(container, args) {
+      this.isInit = false;
+      this.isVisible = false;
+      this.container = container;
+      this.image = container.querySelector('.parallax-image');
+      this.namespace = args.namespace;
+      this.desktopOnly = args.desktopOnly;
+  
+      if (!this.container || !this.image) {
+        return;
       }
   
-      this.init();
-      window.addEventListener('scroll', () => this.scrollHandler());
+      // If set for desktop only, setup listeners for disabling
+      // on mobile and re-enabling on desktop
+      if (this.desktopOnly) {
+        document.addEventListener('matchSmall', function() {
+          this.destroy();
+        }.bind(this));
+  
+        document.addEventListener('unmatchSmall', function() {
+          this.init(true);
+        }.bind(this));
+      }
+  
+      this.init(this.desktopOnly);
     }
   
-    getParallaxInfo() {
-      const { width, height, top } = this.parallaxImage.getBoundingClientRect();
-      let element = this.parallaxImage;
-      let multipliers;
-      let { angle, movement } = element.dataset;
+    parallax.prototype = Object.assign({}, parallax.prototype, {
+      init: function(desktopOnly) {
+        // Reset in case initialized again
+        if (this.isInit) {
+          this.destroy();
+        }
   
-      let movementPixels = angle === 'top' ? Math.ceil(height * (parseFloat(movement) / 100)) : Math.ceil(width * (parseFloat(movement) / 100));
+        this.isInit = true;
   
-      // angle has shorthands "top", "left", "bottom" and "right"
-      // nullish coalescing. using `||` here would fail for `0`
-      angle = this.directionMap[angle] ?? parseFloat(angle);
+        // Do not setup scroll event if on mobile
+        if (desktopOnly && theme.config.bpSmall) {
+          return;
+        }
   
-      // fallback if undefined
-      // NaN is the only value that doesn't equal itself
-      if (angle !== angle) angle = 270; // move to bottom (default parallax effect)
-      if (movementPixels !== movementPixels) movementPixels = 100; // 100px
+        // Set position on page load
+        this.setSizes();
+        this.scrollHandler();
   
-      // check if angle is located in top half and/or left half
-      angle %= 360;
-      if (angle < 0) angle += 360
+        var observer = new IntersectionObserver((entries, observer) => {
+          entries.forEach(entry => {
+            this.isVisible = entry.isIntersecting;
+            if (this.isVisible) {
+              window.on('scroll' + this.namespace, this.onScroll.bind(this));
+            } else {
+              window.off('scroll' + this.namespace);
+            }
+          });
+        }, {rootMargin: '200px 0px 200px 0px'});
   
-      const toLeft = angle > 90 && angle < 270;
-      const toTop  = angle < 180;
+        observer.observe(this.container);
   
-      element.style[toLeft ? 'left' : 'right'] = 0;
-      element.style[toTop  ? 'top' : 'bottom'] = 0;
+        window.on('resize' + this.namespace, theme.utils.debounce(250, this.setSizes.bind(this)));
   
-      // if it's not a perfectly horizontal or vertical movement, get cos and sin
-      if (angle % 90) {
-        const radians = angle * Math.PI / 180
-        multipliers = [ Math.cos(radians), Math.sin(radians) * -1 ] // only sin has to be inverted
-      } else {
-        multipliers = this.directionMultipliers[angle];
+        document.addEventListener('shopify:section:reorder', theme.utils.debounce(250, this.onReorder.bind(this)));
+      },
+  
+      onScroll: function() {
+        if (!this.isVisible) {
+          return;
+        }
+  
+        // If a scroll event finds Shopify's review app,
+        // update parallax scroll positions because of page reflows
+        if (window.SPR && !reset) {
+          this.setSizes();
+          reset = true;
+        }
+  
+        requestAnimationFrame(this.scrollHandler.bind(this));
+      },
+  
+      scrollHandler: function() {
+        var shiftDistance = (window.scrollY - this.elTop) * speed;
+        this.image.style.transform = 'translate3d(0, ' + shiftDistance + 'px, 0)';
+      },
+  
+      setSizes: function() {
+        var rect = this.container.getBoundingClientRect();
+        this.elTop = rect.top + window.scrollY;
+      },
+  
+      onReorder: function() {
+        this.setSizes();
+        this.onScroll();
+      },
+  
+      destroy: function() {
+        this.image.style.transform = 'none';
+        window.off('scroll' + this.namespace);
+        window.off('resize' + this.namespace);
       }
+    });
   
-      // increase width and height according to movement and multipliers
-      if (multipliers[0]) element.style.width  = `calc(100% + ${movementPixels * Math.abs(multipliers[0])}px)`;
-      if (multipliers[1]) element.style.height = `calc(100% + ${movementPixels * Math.abs(multipliers[1])}px)`;
-  
-      return {
-        element,
-        movementPixels,
-        multipliers,
-        top,
-        height
-      }
-    }
-  
-    init() {
-      const { element, movementPixels, multipliers, top, height } = this.getParallaxInfo();;
-  
-      const scrolledInContainer = this.windowInnerHeight - top;
-      const scrollArea = this.windowInnerHeight + height;
-      const progress = scrolledInContainer / scrollArea;
-  
-      if (progress > -0.1 && progress < 1.1) {
-        const position = Math.min(Math.max(progress, 0), 1) * movementPixels;
-        element.style.transform = `translate3d(${position * multipliers[0]}px, ${position * multipliers[1]}px, 0)`;
-      }
-  
-      if (this.isActive) requestAnimationFrame(this.init.bind(this));
-    }
-  
-    scrollHandler() {
-      if (this.isActive) {
-        clearTimeout(this.timeout);
-      } else {
-        this.isActive = true;
-        requestAnimationFrame(this.init.bind(this));
-      }
-  
-      this.timeout = setTimeout(() => this.isActive = false, 20);
-    }
-  }
-  
-  customElements.define('parallax-image', ParallaxImage);
+    return parallax;
+  })();
   
   if (typeof window.noUiSlider === 'undefined') {
     throw new Error('theme.PriceRange is missing vendor noUiSlider: // =require vendor/nouislider.js');
@@ -3219,26 +3199,6 @@ lazySizesConfig.expFactor = 4;
   
       this.slideshow = new Flickity(el, this.args);
   
-      // Prevent dragging on the product slider from triggering a zoom on product images
-      if (el.dataset.zoom && el.dataset.zoom === 'true') {
-        this.slideshow.on('dragStart', () => {
-          this.slideshow.slider.style.pointerEvents = 'none';
-  
-          // With fade enabled, we also need to adjust the pointerEvents on the selected slide
-          if (this.slideshow.options.fade) {
-            this.slideshow.slider.querySelector('.is-selected').style.pointerEvents = 'none';
-          }
-        });
-        this.slideshow.on('dragEnd', () => {
-          this.slideshow.slider.style.pointerEvents = 'auto';
-  
-          // With fade enabled, we also need to adjust the pointerEvents on the selected slide
-          if (this.slideshow.options.fade) {
-            this.slideshow.slider.querySelector('.is-selected').style.pointerEvents = 'auto';
-          }
-        });
-      }
-  
       if (this.args.autoPlay) {
         var wrapper = el.closest(selectors.wrapper);
         this.pauseBtn = wrapper.querySelector(selectors.pauseButton);
@@ -3330,7 +3290,6 @@ lazySizesConfig.expFactor = 4;
             a.classList.remove(classes.isActive);
           });
         }
-  
         this.slideshow.destroy();
       },
       reposition: function() {
@@ -3433,7 +3392,7 @@ lazySizesConfig.expFactor = 4;
   /*============================================================================
     VariantAvailability
     - Cross out sold out or unavailable variants
-    - To disable, use the Variant Picker Block setting
+    - To disable, set dynamicVariantsEnable to false in theme.liquid
     - Required markup:
       - class=variant-input-wrap to wrap select or button group
       - class=variant-input to wrap button/label
@@ -3551,14 +3510,9 @@ lazySizesConfig.expFactor = 4;
         var value = obj.value.replace(/([ #;&,.+*~\':"!^$[\]()=>|\/@])/g,'\\$1');
   
         if (this.type === 'dropdown') {
-          if (obj.soldOut) {
-            group.querySelector('option[value="'+ value +'"]').disabled = true;
-          } else {
-            group.querySelector('option[value="'+ value +'"]').disabled = false;
-          }
+          group.querySelector('option[value="'+ value +'"]').disabled = false;
         } else {
           var buttonGroup = group.querySelector('.variant-input[data-value="'+ value +'"]');
-          console.log('buttonGroup',buttonGroup)
           var input = buttonGroup.querySelector('input');
           var label = buttonGroup.querySelector('label');
   
@@ -3601,21 +3555,18 @@ lazySizesConfig.expFactor = 4;
   //     - see media.liquid for example of this
   theme.videoModal = function() {
     var youtubePlayer;
-    var vimeoPlayer;
   
     var videoHolderId = 'VideoHolder';
     var selectors = {
       youtube: 'a[href*="youtube.com/watch"], a[href*="youtu.be/"]',
-      vimeo: 'a[href*="player.vimeo.com/player/"], a[href*="vimeo.com/"]',
       mp4Trigger: '.product-video-trigger--mp4',
       mp4Player: '.product-video-mp4-sound'
     };
   
     var youtubeTriggers = document.querySelectorAll(selectors.youtube);
-    var vimeoTriggers = document.querySelectorAll(selectors.vimeo);
     var mp4Triggers = document.querySelectorAll(selectors.mp4Trigger);
   
-    if (!youtubeTriggers.length && !vimeoTriggers.length && !mp4Triggers.length) {
+    if (!youtubeTriggers.length && !mp4Triggers.length) {
       return;
     }
   
@@ -3623,10 +3574,6 @@ lazySizesConfig.expFactor = 4;
   
     if (youtubeTriggers.length) {
       theme.LibraryLoader.load('youtubeSdk');
-    }
-  
-    if (vimeoTriggers.length) {
-      theme.LibraryLoader.load('vimeo', window.vimeoApiReady);
     }
   
     var modal = new theme.Modals('VideoModal', 'video-modal', {
@@ -3637,10 +3584,6 @@ lazySizesConfig.expFactor = 4;
   
     youtubeTriggers.forEach(btn => {
       btn.addEventListener('click', triggerYouTubeModal);
-    });
-  
-    vimeoTriggers.forEach(btn => {
-      btn.addEventListener('click', triggerVimeoModal);
     });
   
     mp4Triggers.forEach(btn => {
@@ -3669,29 +3612,6 @@ lazySizesConfig.expFactor = 4;
           events: {
             onReady: onYoutubeReady
           }
-        }
-      );
-    }
-  
-    function triggerVimeoModal(evt) {
-      // If not already loaded, treat as normal link
-      if (!theme.config.vimeoReady) {
-        return;
-      }
-  
-      evt.preventDefault();
-      emptyVideoHolder();
-  
-      modal.open(evt);
-  
-      var videoId = evt.currentTarget.dataset.videoId;
-      var videoLoop = evt.currentTarget.dataset.videoLoop;
-      vimeoPlayer = new theme.VimeoPlayer(
-        videoHolderId,
-        videoId,
-        {
-          style: 'sound',
-          loop: videoLoop,
         }
       );
     }
@@ -3731,8 +3651,6 @@ lazySizesConfig.expFactor = 4;
     function closeVideoModal() {
       if (youtubePlayer && typeof youtubePlayer.destroy === 'function') {
         youtubePlayer.destroy();
-      } else if (vimeoPlayer && typeof vimeoPlayer.destroy === 'function') {
-        vimeoPlayer.destroy();
       } else {
         emptyVideoHolder();
       }
@@ -3762,7 +3680,10 @@ lazySizesConfig.expFactor = 4;
     _open(context, insertedHtml) {
       this.toolTipContent.innerHTML = insertedHtml;
   
-      this._lockScrolling();
+      theme.a11y.trapFocus({
+        container: this.el,
+        namespace: 'tooltip_focus'
+      });
   
       if (this.closeButton) {
         this.closeButton.on('click' + '.tooltip-close', () => {
@@ -3787,31 +3708,14 @@ lazySizesConfig.expFactor = 4;
       this.el.dataset.toolTipOpen = 'false';
       this.el.dataset.toolTip = '';
   
-      this._unlockScrolling();
-  
-      this.closeButton.off('click' + '.tooltip-close');
-      document.documentElement.off('click' + '.tooltip-outerclick');
-      document.documentElement.off('keydown' + '.tooltip-esc');
-    }
-  
-    _lockScrolling() {
-      theme.a11y.trapFocus({
-        container: this.el,
-        namespace: 'tooltip_focus'
-      });
-  
-      theme.a11y.lockMobileScrolling();
-      document.documentElement.classList.add('modal-open');
-    }
-  
-    _unlockScrolling() {
       theme.a11y.removeTrapFocus({
         container: this.el,
         namespace: 'tooltip_focus'
       });
   
-      theme.a11y.unlockMobileScrolling();
-      document.documentElement.classList.remove('modal-open');
+      this.closeButton.off('click' + '.tooltip-close');
+      document.documentElement.off('click' + '.tooltip-outerclick');
+      document.documentElement.off('keydown' + '.tooltip-esc');
     }
   }
   
@@ -3883,7 +3787,6 @@ lazySizesConfig.expFactor = 4;
   
       document.addEventListener(`modalOpen.${this.newsletterId}`, () => this.hide());
       document.addEventListener(`modalClose.${this.newsletterId}`, () => this.show());
-      document.addEventListener(`newsletter:openReminder`, () => this.show(0));
   
       this.closeBtn.addEventListener('click', () => {
         this.hide();
@@ -3899,12 +3802,10 @@ lazySizesConfig.expFactor = 4;
     }
   
     show(time = this.secondsBeforeShow, forceOpen = false) {
-      const reminderAppeared = (sessionStorage.getItem('reminderAppeared') === 'true');
-  
-      if (!reminderAppeared) {
+      if (!sessionStorage.getItem('newsletterAppeared') === true || forceOpen) {
         setTimeout(() => {
           this.dataset.enabled = 'true';
-          sessionStorage.setItem('reminderAppeared', true);
+          if (!forceOpen) sessionStorage.setItem('newsletterAppeared', true);
         }, time * 1000);
       }
     }
@@ -4261,19 +4162,7 @@ lazySizesConfig.expFactor = 4;
       if (!config.stickyEnabled) {
         return;
       }
-  
       var h = siteHeader.offsetHeight;
-  
-      // If sticky header is 'active' i.e. we have scrolled a bit down the page
-      // the site header has 20px less padding when sticky
-      // and this is not factored into the height calculation
-      // The 20px is what causes the header to overlap the announcement bar
-      // This only applies when the height is being calculated on larger screen sizes
-      if (siteHeader.classList.contains('site-header--stuck') && !theme.config.bpSmall) {
-        let siteHeaderPadding = parseFloat(window.getComputedStyle(siteHeader, null).getPropertyValue('padding-top'));
-        h += siteHeaderPadding * 2;
-      }
-  
       var stickyHeader = document.querySelector('#' + config.stickyHeaderWrapper);
       stickyHeader.style.height = h + 'px';
     }
@@ -4783,9 +4672,7 @@ lazySizesConfig.expFactor = 4;
           title: product.title,
           url: product.url,
           image_responsive_url: theme.Images.lazyloadImagePath(product.image),
-          image_aspect_ratio: product.featured_image.aspect_ratio,
-          vendor: product.vendor,
-          price_min: product.price_min,
+          image_aspect_ratio: product.featured_image.aspect_ratio
         };
   
         products.push(new_product);
@@ -4921,13 +4808,6 @@ lazySizesConfig.expFactor = 4;
   
     items.forEach(product => {
       var image = theme.buildProductImage(product, imageSize);
-  
-      let priceMarkup = '';
-      let vendorMarkup = '';
-  
-      if (theme.settings.predictiveSearchPrice) priceMarkup = `<div class="grid-product__price">${theme.strings.productFrom}${theme.Currency.formatMoney(product.price_min, theme.moneyFormat)}</div>`;
-      if (theme.settings.predictiveSearchVendor) vendorMarkup = `<div class="grid-product__vendor">${product.vendor}</div>`;
-  
       var markup = `
         <div class="grid__item grid-product ${gridWidth} aos-animate" data-aos="row-of-${rowOf}">
           <div class="grid-product__content">
@@ -4937,8 +4817,6 @@ lazySizesConfig.expFactor = 4;
               </div>
               <div class="grid-product__meta">
                 <div class="grid-product__title">${product.title}</div>
-                ${priceMarkup}
-                ${vendorMarkup}
               </div>
             </a>
           </div>
@@ -5331,15 +5209,7 @@ lazySizesConfig.expFactor = 4;
           return;
         }
         setTimeout(function () {
-          const newsletterAppeared = (sessionStorage.getItem('newsletterAppeared') === 'true');
-          if (newsletterAppeared) {
-            const openReminder = new CustomEvent('newsletter:openReminder', { bubbles: true });
-            this.container.dispatchEvent(openReminder);
-          } else {
-            this.modal.open();
-            sessionStorage.setItem('newsletterAppeared', true);
-          }
-  
+          this.modal.open();
         }.bind(this), this.data.secondsBeforeShow * 1000);
       },
   
@@ -5352,9 +5222,9 @@ lazySizesConfig.expFactor = 4;
   
         var expiry = success ? 200 : this.data.daysBeforeReappear;
         var hasReminder = (this.data.hasReminder === 'true');
-        var reminderAppeared = (sessionStorage.getItem('reminderAppeared') === 'true');
+        var newsletterAppeared =  (sessionStorage.getItem('newsletterAppeared') === 'true');
   
-        if (hasReminder && reminderAppeared) {
+        if (hasReminder && newsletterAppeared) {
           Cookies.set(this.cookieName, 'opened', { path: '/', expires: expiry });
         } else if(!hasReminder) {
           Cookies.set(this.cookieName, 'opened', { path: '/', expires: expiry });
@@ -5598,7 +5468,10 @@ lazySizesConfig.expFactor = 4;
           return;
         }
   
-        var url = this.url;
+        var id = section.dataset.productId;
+        var limit = section.dataset.limit;
+  
+        var url = this.url + '?section_id=product-recommendations&limit='+ limit +'&product_id=' + id;
   
         // When section his hidden and shown, make sure it starts empty
         if (Shopify.designMode) {
@@ -5710,6 +5583,15 @@ lazySizesConfig.expFactor = 4;
         } else {
           // Add loaded class to first slide
           slides[0].classList.add('is-selected');
+        }
+  
+        if (this.container.hasAttribute('data-parallax')) {
+          // Create new parallax for each slideshow image
+          this.container.querySelectorAll(selectors.parallaxContainer).forEach(function(el, i) {
+            new theme.Parallax(el, {
+              namespace: this.namespace + '-parallax-' + i
+            });
+          }.bind(this));
         }
       },
   
@@ -5912,51 +5794,74 @@ lazySizesConfig.expFactor = 4;
   })();
   
 
-
-  theme.Blog = (function() {
-
+  theme.BackgroundImage = (function() {
   
-
-    function Blog(container) {
-
-      this.tagFilters();
-
-    }
-
+    var selectors = {
+      parallaxContainer: '.parallax-container'
+    };
   
-
-    Blog.prototype = Object.assign({}, Blog.prototype, {
-
-      tagFilters: function() {
-
-        var filterBy = document.getElementById('BlogTagFilter');
-
-  
-
-        if (!filterBy) {
-
-          return;
-
-        }
-
-  
-
-        filterBy.addEventListener('change', function() {
-
-          location.href = filterBy.value;
-
-        });
-
+    function backgroundImage(container) {
+      this.container = container;
+      if (!container) {
+        return;
       }
-
-    });
-
   
-
-    return Blog;
-
+      var sectionId = container.getAttribute('data-section-id');
+      this.namespace = '.' + sectionId;
+  
+      theme.initWhenVisible({
+        element: this.container,
+        callback: this.init.bind(this)
+      });
+    }
+  
+    backgroundImage.prototype = Object.assign({}, backgroundImage.prototype, {
+      init: function() {
+        if (this.container.dataset && this.container.dataset.parallax) {
+          var parallaxContainer = this.container.querySelector(selectors.parallaxContainer);
+          var args = {
+            namespace: this.namespace + '-parallax',
+            desktopOnly: true
+          };
+  
+          theme.parallaxSections[this.namespace] = new theme.Parallax(parallaxContainer, args);
+        }
+      },
+  
+      onUnload: function(evt) {
+        if (!this.container) { return }
+        if (theme.parallaxSections[this.namespace] && typeof theme.parallaxSections[this.namespace].destroy === 'function') {
+          theme.parallaxSections[this.namespace].destroy();
+        }
+        delete theme.parallaxSections[this.namespace];
+      }
+    });
+  
+    return backgroundImage;
   })();
-
+  
+  theme.Blog = (function() {
+  
+    function Blog(container) {
+      this.tagFilters();
+    }
+  
+    Blog.prototype = Object.assign({}, Blog.prototype, {
+      tagFilters: function() {
+        var filterBy = document.getElementById('BlogTagFilter');
+  
+        if (!filterBy) {
+          return;
+        }
+  
+        filterBy.addEventListener('change', function() {
+          location.href = filterBy.value;
+        });
+      }
+    });
+  
+    return Blog;
+  })();
   
   theme.CollectionHeader = (function() {
     var hasLoadedBefore = false;
@@ -5970,6 +5875,14 @@ lazySizesConfig.expFactor = 4;
           this.checkIfNeedReload();
         }
         theme.loadImageSection(heroImageContainer);
+  
+        if (container.dataset && container.dataset.parallax) {
+          var parallaxContainer = container.querySelector('.parallax-container');
+          var args = {
+            namespace: this.namespace + '-parallax'
+          };
+          theme.parallaxSections[this.namespace] = new theme.Parallax(parallaxContainer, args);
+        }
       } else if (theme.settings.overlayHeader) {
         theme.headerNav.disableOverlayHeader();
       }
@@ -5991,6 +5904,13 @@ lazySizesConfig.expFactor = 4;
           if (!header.classList.contains('header-wrapper--overlay')) {
             location.reload();
           }
+        }
+      },
+  
+      onUnload: function() {
+        if (theme.parallaxSections[this.namespace]) {
+          theme.parallaxSections[this.namespace].destroy();
+          delete theme.parallaxSections[this.namespace];
         }
       }
     });
@@ -6610,7 +6530,6 @@ lazySizesConfig.expFactor = 4;
         originalSelectorId: '[data-product-select]',
         singleOptionSelector: '[data-variant-input]',
         variantColorSwatch: '.variant__input--color-swatch',
-        dynamicVariantsEnabled: '[data-dynamic-variants-enabled]',
   
         availabilityContainer: '[data-store-availability-holder]'
       };
@@ -6740,15 +6659,13 @@ lazySizesConfig.expFactor = 4;
         }
   
         this.variantsObject = JSON.parse(variantJson.innerHTML);
-        var dynamicVariantsEnabled = !!this.container.querySelector(selectors.dynamicVariantsEnabled)
   
         var options = {
           container: this.container,
           enableHistoryState: this.settings.enableHistoryState,
           singleOptionSelector: this.selectors.singleOptionSelector,
           originalSelectorId: this.selectors.originalSelectorId,
-          variants: this.variantsObject,
-          dynamicVariantsEnabled
+          variants: this.variantsObject
         };
   
         var swatches = this.container.querySelectorAll(this.selectors.variantColorSwatch);
@@ -6789,7 +6706,7 @@ lazySizesConfig.expFactor = 4;
         }
   
         // Update individual variant availability on each selection
-        if (dynamicVariantsEnabled) {
+        if (theme.settings.dynamicVariantsEnable) {
           var currentVariantJson = this.container.querySelector(this.selectors.currentVariantJson);
   
           if (currentVariantJson) {
@@ -6845,8 +6762,6 @@ lazySizesConfig.expFactor = 4;
         var variant = evt.detail.variant;
         var cartBtn = this.container.querySelector(this.selectors.addToCart);
         var cartBtnText = this.container.querySelector(this.selectors.addToCartText);
-  
-        if (!cartBtn) return;
   
         if (variant) {
           if (variant.available) {
@@ -6992,21 +6907,28 @@ lazySizesConfig.expFactor = 4;
         if (variant.inventory_management === 'shopify' && window.inventories && window.inventories[this.productId]) {
           var variantInventoryObject = window.inventories[this.productId][variant.id];
   
+          // Hide stock if policy is continue
+          if (variantInventoryObject.policy === 'continue') {
+            this.toggleInventoryQuantity(variant, false);
+            this.toggleIncomingInventory(false);
+            return;
+          }
+  
           var quantity = variantInventoryObject.quantity;
           var showInventory = true;
           var showIncomingInventory = false;
   
-          if (quantity <= 0 || quantity > this.settings.inventoryThreshold || variantInventoryObject.policy === 'continue') {
+          if (quantity <= 0 || quantity > this.settings.inventoryThreshold) {
             showInventory = false;
           }
   
-          this.toggleInventoryQuantity(variant, variantInventoryObject);
+          this.toggleInventoryQuantity(variant, showInventory, quantity);
   
           // Only show incoming inventory when:
           // - inventory notice itself is hidden
           // - have incoming inventory
           // - current quantity is below theme setting threshold
-          if (showInventory && variantInventoryObject.incoming === 'true' && quantity <= this.settings.inventoryThreshold) {
+          if (!showInventory && variantInventoryObject.incoming === 'true' && quantity <= this.settings.inventoryThreshold) {
             showIncomingInventory = true;
           }
   
@@ -7023,24 +6945,19 @@ lazySizesConfig.expFactor = 4;
         this.storeAvailability.updateContent(variant.id);
       },
   
-      toggleInventoryQuantity: function(variant, variantInventoryObject) {
-        const { quantity, policy } = variantInventoryObject || {};
+      toggleInventoryQuantity: function(variant, show, qty) {
         if (!this.settings.inventory) {
-          return;
+          show = false;
         }
   
         var el = this.container.querySelector(this.selectors.inventory);
         var salesPoint = el.closest('.product-block');
   
-        if (parseInt(quantity) <= parseInt(this.settings.inventoryThreshold) && policy !== 'continue') {
-          el.parentNode.classList.add('inventory--low');
-          if (quantity > 1) {
-            el.textContent = theme.strings.otherStockLabel.replace('[count]', quantity);
-          } else {
-            el.textContent = theme.strings.oneStockLabel.replace('[count]', quantity);
-          }
+        if (parseInt(qty) <= parseInt(this.settings.inventoryThreshold)) {
+          el.parentNode.classList.add('inventory--low')
+          el.textContent = theme.strings.stockLabel.replace('[count]', qty);
         } else {
-          el.parentNode.classList.remove('inventory--low');
+          el.parentNode.classList.remove('inventory--low')
           el.textContent = theme.strings.inStockLabel;
         }
   
@@ -7059,12 +6976,12 @@ lazySizesConfig.expFactor = 4;
   
       toggleIncomingInventory: function(show, available, date) {
         var el = this.container.querySelector(this.selectors.incomingInventory);
+        var salesPoint = el.closest('.product-block');
   
         if (!el) {
           return;
         }
   
-        var salesPoint = el.closest('.product-block');
         var textEl = el.querySelector('.js-incoming-text');
   
         if (show) {
@@ -7100,8 +7017,6 @@ lazySizesConfig.expFactor = 4;
           var type = vid.dataset.videoType;
           if (type === 'youtube') {
             this.initYoutubeVideo(vid);
-          } else if (type === 'vimeo') {
-            this.initVimeoVideo(vid);
           } else if (type === 'mp4') {
             this.initMp4Video(vid);
           }
@@ -7112,7 +7027,7 @@ lazySizesConfig.expFactor = 4;
         videoObjects[div.id] = new theme.YouTube(
           div.id,
           {
-            videoId: div.dataset.videoId,
+            videoId: div.dataset.youtubeId,
             videoParent: selectors.videoParent,
             autoplay: false, // will handle this in callback
             style: div.dataset.videoStyle,
@@ -7123,19 +7038,6 @@ lazySizesConfig.expFactor = 4;
             }
           }
         );
-      },
-  
-      initVimeoVideo: function(div) {
-        videoObjects[div.id] = new theme.VimeoPlayer(
-          div.id,
-          div.dataset.videoId,
-          {
-            videoParent: selectors.videoParent,
-            autoplay: false,
-            style: div.dataset.videoStyle,
-            loop: div.dataset.videoLoop,
-          }
-        )
       },
   
       // Comes from YouTube SDK
@@ -7158,7 +7060,6 @@ lazySizesConfig.expFactor = 4;
   
         obj.parent.classList.remove('loading');
         obj.parent.classList.add('loaded');
-        obj.parent.classList.add('video-interactable'); // Previously, video was only interactable after slide change
   
         // If we have an element, it is in the visible/first slide,
         // and is muted, play it
@@ -7265,13 +7166,7 @@ lazySizesConfig.expFactor = 4;
       },
   
       getThumbIndex: function(target) {
-        if (this.settings.stackedImages) {
-          return target.dataset.index
-        } else {
-          return Array.from(
-            target.parentElement.children
-          ).indexOf(target);
-        }
+        return target.dataset.index;
       },
   
       updateVariantImage: function(evt) {
@@ -7316,7 +7211,6 @@ lazySizesConfig.expFactor = 4;
         }
   
         var mainSliderArgs = {
-          dragThreshold: 25,
           adaptiveHeight: true,
           avoidReflow: true,
           initialIndex: this.settings.currentSlideIndex,
@@ -7475,12 +7369,10 @@ lazySizesConfig.expFactor = 4;
             // Update any elements with `form` attribute.
             // Form element already has `-modal` appended
             var form = blocks.querySelector(this.selectors.form);
-            if (form) {
-              var formId = form.getAttribute('id');
-              blocks.querySelectorAll('[form]').forEach(el => {
-                el.setAttribute('form', formId);
-              });
-            }
+            var formId = form.getAttribute('id');
+            blocks.querySelectorAll('[form]').forEach(el => {
+              el.setAttribute('form', formId);
+            });
   
             this.blocksHolder.innerHTML = '';
             this.blocksHolder.append(blocks);
@@ -7500,7 +7392,7 @@ lazySizesConfig.expFactor = 4;
   
             document.dispatchEvent(new CustomEvent('quickview:loaded', {
               detail: {
-                productId: this.productId
+                productId: this.sectionId
               }
             }));
           }.bind(this));
@@ -7516,7 +7408,7 @@ lazySizesConfig.expFactor = 4;
               this.initProductSlider();
             } else {
               document.addEventListener('quickview:loaded', function(evt) {
-                if (evt.detail.productId === this.productId) {
+                if (evt.detail.productId === this.sectionId) {
                   this.initProductSlider();
                 }
               }.bind(this));
@@ -7536,7 +7428,7 @@ lazySizesConfig.expFactor = 4;
         document.dispatchEvent(new CustomEvent('quickview:open', {
           detail: {
             initialized: initialized,
-            productId: this.productId
+            productId: this.sectionId
           }
         }));
       },
